@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meeting & Lecture Analytics</title>
+  <style>
+    :root { font-family: Inter, Segoe UI, Arial, sans-serif; color: #172033; background: #f4f7fb; }
+    body { margin: 0; }
+    header { padding: 26px 20px; background: #14233b; color: white; }
+    header h1 { margin: 0 0 8px; font-size: clamp(23px, 3vw, 32px); }
+    header p { margin: 0; color: #d5dfef; }
+    main { max-width: 1050px; margin: 24px auto; padding: 0 16px 40px; }
+    .card { background: white; border: 1px solid #e0e7f0; border-radius: 14px; padding: 20px; margin-bottom: 16px; box-shadow: 0 3px 12px #10204008; }
+    h2 { margin-top: 0; font-size: 20px; }
+    label { display: block; font-weight: 600; margin: 12px 0 7px; }
+    input, select, textarea, button { font: inherit; }
+    input[type=file], select, textarea { width: 100%; box-sizing: border-box; border: 1px solid #cbd5e1; border-radius: 9px; padding: 11px; background: white; }
+    button { border: 0; border-radius: 9px; padding: 12px 17px; background: #245bd6; color: white; cursor: pointer; font-weight: 650; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .muted { color: #64748b; font-size: 14px; }
+    .status { margin-top: 12px; white-space: pre-wrap; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+    .result { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.55; }
+    .hidden { display: none; }
+    ul, ol { padding-left: 23px; line-height: 1.6; }
+    .tag { display: inline-block; border-radius: 99px; padding: 4px 9px; background: #edf3ff; color: #234fa7; font-size: 13px; }
+    footer { color: #64748b; text-align: center; font-size: 13px; padding: 10px 20px 25px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Multimodal Meeting & Lecture Analytics</h1>
+  <p>Upload a recording to transcribe, translate, summarize and ask questions.</p>
+</header>
+<main>
+  <section class="card">
+    <h2>1. Upload recording</h2>
+    <p class="muted">Use a short MP4/MOV video with clear speech, or upload an MP3/WAV audio file. Processing requires internet and configured API keys.</p>
+    <form id="uploadForm">
+      <label for="media">Video or audio file</label>
+      <input id="media" name="file" type="file" accept=".mp4,.mov,.mkv,.webm,.avi,.mp3,.wav,.m4a" required>
+      <label for="language">Translate into</label>
+      <select id="language" name="target_language">
+        <option>English</option><option selected>Kannada</option><option>Hindi</option>
+        <option>Telugu</option><option>Tamil</option><option>Malayalam</option>
+        <option>Marathi</option><option>Bengali</option><option>French</option><option>Spanish</option>
+      </select>
+      <p><button id="processBtn" type="submit">Process recording</button></p>
+    </form>
+    <div id="status" class="status muted" role="status"></div>
+  </section>
+
+  <div id="results" class="hidden">
+    <section class="card">
+      <h2>Recording details</h2>
+      <p><span class="tag" id="detected"></span> <span class="tag" id="model"></span></p>
+      <p class="muted" id="filename"></p>
+    </section>
+    <div class="grid">
+      <section class="card"><h2>Executive summary</h2><div id="summary" class="result"></div></section>
+      <section class="card"><h2>Key points</h2><ul id="keyPoints"></ul></section>
+      <section class="card"><h2>Decisions</h2><ul id="decisions"></ul></section>
+      <section class="card"><h2>Action items</h2><ul id="actions"></ul></section>
+      <section class="card"><h2>Risks / concerns</h2><ul id="risks"></ul></section>
+    </div>
+    <section class="card"><h2>Original transcript</h2><div id="transcript" class="result"></div></section>
+    <section class="card"><h2>English translation</h2><div id="english" class="result"></div></section>
+    <section class="card"><h2>Requested translation</h2><div id="translated" class="result"></div></section>
+    <section class="card">
+      <h2>Ask a question about the recording</h2>
+      <p class="muted">Example: What decision was made about the database?</p>
+      <form id="questionForm">
+        <textarea id="question" rows="2" placeholder="Type your question..." required></textarea>
+        <p><button id="askBtn" type="submit">Ask question</button></p>
+      </form>
+      <div id="answer" class="result"></div>
+    </section>
+  </div>
+</main>
+<footer>API keys stay on the Python backend. Do not publish your .env file.</footer>
+<script>
+  let latestTranscript = "";
+  const $ = id => document.getElementById(id);
+  function fillList(id, items, formatter = x => typeof x === "string" ? x : JSON.stringify(x)) {
+    const list = $(id); list.replaceChildren();
+    (items || []).forEach(item => { const li = document.createElement("li"); li.textContent = formatter(item); list.appendChild(li); });
+    if (!items || !items.length) { const li = document.createElement("li"); li.textContent = "None stated."; list.appendChild(li); }
+  }
+  $("uploadForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    const file = $("media").files[0];
+    if (!file) return;
+    $("processBtn").disabled = true;
+    $("status").textContent = "Processing file… audio extraction, transcription, translation and analysis may take a few minutes.";
+    $("results").classList.add("hidden");
+    $("answer").textContent = "";
+    const data = new FormData();
+    data.append("file", file);
+    data.append("target_language", $("language").value);
+    try {
+      const response = await fetch("/api/process", { method: "POST", body: data });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Processing failed.");
+      latestTranscript = result.transcript || "";
+      $("detected").textContent = "Detected language: " + result.detected_language;
+      $("model").textContent = "Gemini: " + result.model;
+      $("filename").textContent = "File: " + result.filename;
+      $("summary").textContent = result.summary || "No summary returned.";
+      $("transcript").textContent = latestTranscript;
+      $("english").textContent = result.english_translation || "No English translation returned.";
+      $("translated").textContent = result.requested_translation || "No translation returned.";
+      fillList("keyPoints", result.key_points);
+      fillList("decisions", result.decisions);
+      fillList("actions", result.action_items, x => `${x.task || ""} | Owner: ${x.owner || "Not specified"} | Deadline: ${x.deadline || "Not specified"}`);
+      fillList("risks", result.risks);
+      $("results").classList.remove("hidden");
+      $("status").textContent = "Done. Please review important names, numbers and decisions against the recording.";
+      $("results").scrollIntoView({ behavior: "smooth" });
+    } catch (error) {
+      $("status").textContent = "Error: " + error.message;
+    } finally {
+      $("processBtn").disabled = false;
+    }
+  });
+  $("questionForm").addEventListener("submit", async event => {
+    event.preventDefault();
+    if (!latestTranscript) { $("answer").textContent = "Upload and process a recording first."; return; }
+    $("askBtn").disabled = true; $("answer").textContent = "Finding the answer…";
+    try {
+      const response = await fetch("/api/ask", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ transcript: latestTranscript, question: $("question").value })
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || "Question failed.");
+      $("answer").textContent = result.answer || "No answer returned.";
+    } catch (error) { $("answer").textContent = "Error: " + error.message; }
+    finally { $("askBtn").disabled = false; }
+  });
+</script>
+</body>
+</html>
